@@ -1,0 +1,158 @@
+name: Check for upstream Chrome release
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Check for updates and show changes without pushing'
+        type: boolean
+        default: false
+
+env:
+  PKGNAME: google-chrome-current
+  DEB_URL: https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read current version from PKGBUILD
+        id: current
+        run: |
+          source PKGBUILD
+          echo "version=$pkgver" >> "$GITHUB_OUTPUT"
+          echo "release=$pkgrel" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch latest version from Google
+        id: latest
+        run: |
+          VER=$(curl -sSf "https://dl.google.com/linux/chrome/deb/dists/stable/main/binary-amd64/Packages" \
+            | grep -A1 "Package: google-chrome-stable" \
+            | awk '/Version/{print $2}' \
+            | cut -d '-' -f1)
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Compare
+        id: compare
+        run: |
+          echo "Current: ${{ steps.current.outputs.version }}"
+          echo "Latest:  ${{ steps.latest.outputs.version }}"
+          if [ "${{ steps.current.outputs.version }}" = "${{ steps.latest.outputs.version }}" ]; then
+            echo "uptodate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "uptodate=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Nothing to do
+        if: steps.compare.outputs.uptodate == 'true'
+        run: echo "No update needed — current version is already ${{ steps.current.outputs.version }}"
+
+      - name: Download new .deb
+        if: steps.compare.outputs.uptodate == 'false'
+        run: |
+          wget -q "${{ env.DEB_URL }}/google-chrome-stable_${{ steps.latest.outputs.version }}-1_amd64.deb" \
+            -O /tmp/chrome.deb
+          file /tmp/chrome.deb | grep -q "Debian binary" || {
+            echo "Downloaded file is not a valid .deb"; exit 1;
+          }
+
+      - name: Compute checksums
+        if: steps.compare.outputs.uptodate == 'false'
+        id: sums
+        run: |
+          echo "deb=$(sha512sum /tmp/chrome.deb | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "eula=$(sha512sum eula_text.html | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "sh=$(sha512sum google-chrome-stable.sh | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Update PKGBUILD
+        if: steps.compare.outputs.uptodate == 'false'
+        run: |
+          sed -i "s/pkgver=${{ steps.current.outputs.version }}/pkgver=${{ steps.latest.outputs.version }}/" PKGBUILD
+          sed -i "s/pkgrel=${{ steps.current.outputs.release }}/pkgrel=1/" PKGBUILD
+
+          S0="'${{ steps.sums.outputs.deb }}'"
+          S1="'${{ steps.sums.outputs.eula }}'"
+          S2="'${{ steps.sums.outputs.sh }}'"
+
+          sed -i "0,/'[0-9a-f]\{128\}'/s||$S0|" PKGBUILD
+          sed -i "0,/'[0-9a-f]\{128\}'/s||$S1|" PKGBUILD
+          sed -i "0,/'[0-9a-f]\{128\}'/s||$S2|" PKGBUILD
+
+      - name: Regenerate .SRCINFO
+        if: steps.compare.outputs.uptodate == 'false'
+        run: |
+          printf '%s\n' \
+            "pkgbase = ${{ env.PKGNAME }}" \
+            "\tpkgdesc = The popular web browser by Google (Stable Channel). Maintained fork — the original google-chrome package has not been kept up to date." \
+            "\tpkgver = ${{ steps.latest.outputs.version }}" \
+            "\tpkgrel = 1" \
+            "\turl = https://www.google.com/chrome" \
+            "\tinstall = ${{ env.PKGNAME }}.install" \
+            "\tarch = x86_64" \
+            "\tlicense = custom:chrome" \
+            "\tdepends = alsa-lib" \
+            "\tdepends = gtk3" \
+            "\tdepends = libcups" \
+            "\tdepends = libxss" \
+            "\tdepends = libxtst" \
+            "\tdepends = nss" \
+            "\tdepends = ttf-liberation" \
+            "\tdepends = xdg-utils" \
+            "\toptdepends = pipewire: WebRTC desktop sharing under Wayland" \
+            "\toptdepends = kdialog: for file dialogs in KDE" \
+            "\toptdepends = gnome-keyring: for storing passwords in GNOME keyring" \
+            "\toptdepends = kwallet: for storing passwords in KWallet" \
+            "\toptions = !emptydirs" \
+            "\toptions = !strip" \
+            "\tsource = ${{ env.DEB_URL }}/google-chrome-stable_${{ steps.latest.outputs.version }}-1_amd64.deb" \
+            "\tsource = eula_text.html" \
+            "\tsource = google-chrome-stable.sh" \
+            "\tsha512sums = ${{ steps.sums.outputs.deb }}" \
+            "\tsha512sums = ${{ steps.sums.outputs.eula }}" \
+            "\tsha512sums = ${{ steps.sums.outputs.sh }}" \
+            "" \
+            "pkgname = ${{ env.PKGNAME }}" > .SRCINFO
+
+      - name: Validate PKGBUILD
+        if: steps.compare.outputs.uptodate == 'false'
+        run: |
+          source PKGBUILD
+          [ -n "$pkgver" ] || { echo "pkgver is empty!"; exit 1; }
+          [[ "$pkgver" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "pkgver format is wrong: $pkgver"; exit 1; }
+
+      - name: Dry-run summary
+        if: steps.compare.outputs.uptodate == 'false' && github.event.inputs.dry_run == 'true'
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "  DRY RUN — would push:"
+          echo "    ${{ steps.current.outputs.version }} → ${{ steps.latest.outputs.version }}"
+          echo "═══════════════════════════════════════════"
+          git diff PKGBUILD .SRCINFO
+
+      - name: Push to AUR
+        if: steps.compare.outputs.uptodate == 'false' && github.event.inputs.dry_run != 'true'
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+
+          eval "$(ssh-agent -s)"
+          echo '${{ secrets.AUR_SSH_KEY }}' | ssh-add -
+
+          git config user.name "spivanatalie64"
+          git config user.email "natalie@acreetionos.org"
+
+          git add PKGBUILD .SRCINFO
+          git commit -m "upgpkg: ${{ env.PKGNAME }} ${{ steps.latest.outputs.version }}-1
+
+          New upstream release.
+
+          Auto-detected and pushed by the update.yml workflow."
+
+          git push "${{ secrets.AUR_REMOTE }}" master
