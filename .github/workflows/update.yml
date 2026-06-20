@@ -36,14 +36,18 @@ jobs:
             | grep -A1 "Package: google-chrome-stable" \
             | awk '/Version/{print $2}' \
             | cut -d '-' -f1)
+          [ -n "$VER" ] || { echo "Failed to detect latest version"; exit 1; }
           echo "version=$VER" >> "$GITHUB_OUTPUT"
 
       - name: Compare
         id: compare
         run: |
-          echo "Current: ${{ steps.current.outputs.version }}"
-          echo "Latest:  ${{ steps.latest.outputs.version }}"
-          if [ "${{ steps.current.outputs.version }}" = "${{ steps.latest.outputs.version }}" ]; then
+          CURRENT=${{ steps.current.outputs.version }}
+          LATEST=${{ steps.latest.outputs.version }}
+          echo "Current: $CURRENT"
+          echo "Latest:  $LATEST"
+          [ -n "$LATEST" ] || { echo "Latest version is empty!"; exit 1; }
+          if [ "$CURRENT" = "$LATEST" ]; then
             echo "uptodate=true" >> "$GITHUB_OUTPUT"
           else
             echo "uptodate=false" >> "$GITHUB_OUTPUT"
@@ -66,9 +70,13 @@ jobs:
         if: steps.compare.outputs.uptodate == 'false'
         id: sums
         run: |
-          echo "deb=$(sha512sum /tmp/chrome.deb | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          echo "eula=$(sha512sum eula_text.html | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          echo "sh=$(sha512sum google-chrome-stable.sh | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          DEB_SUM=$(sha512sum /tmp/chrome.deb | awk '{print $1}')
+          EULA_SUM=$(sha512sum eula_text.html | awk '{print $1}')
+          SH_SUM=$(sha512sum google-chrome-stable.sh | awk '{print $1}')
+          [ -n "$DEB_SUM" ] || { echo "Failed to compute deb checksum"; exit 1; }
+          echo "deb=$DEB_SUM" >> "$GITHUB_OUTPUT"
+          echo "eula=$EULA_SUM" >> "$GITHUB_OUTPUT"
+          echo "sh=$SH_SUM" >> "$GITHUB_OUTPUT"
 
       - name: Update PKGBUILD
         if: steps.compare.outputs.uptodate == 'false'
@@ -76,13 +84,11 @@ jobs:
           sed -i "s/pkgver=${{ steps.current.outputs.version }}/pkgver=${{ steps.latest.outputs.version }}/" PKGBUILD
           sed -i "s/pkgrel=${{ steps.current.outputs.release }}/pkgrel=1/" PKGBUILD
 
-          S0="'${{ steps.sums.outputs.deb }}'"
-          S1="'${{ steps.sums.outputs.eula }}'"
-          S2="'${{ steps.sums.outputs.sh }}'"
-
-          sed -i "0,/'[0-9a-f]\{128\}'/s||$S0|" PKGBUILD
-          sed -i "0,/'[0-9a-f]\{128\}'/s||$S1|" PKGBUILD
-          sed -i "0,/'[0-9a-f]\{128\}'/s||$S2|" PKGBUILD
+          perl -i -0pe "
+            s/'[0-9a-f]{128}'/'${{ steps.sums.outputs.deb }}'/;
+            s/'[0-9a-f]{128}'/'${{ steps.sums.outputs.eula }}'/;
+            s/'[0-9a-f]{128}'/'${{ steps.sums.outputs.sh }}'/
+          " PKGBUILD
 
       - name: Regenerate .SRCINFO
         if: steps.compare.outputs.uptodate == 'false'
@@ -126,6 +132,10 @@ jobs:
           [ -n "$pkgver" ] || { echo "pkgver is empty!"; exit 1; }
           [[ "$pkgver" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { echo "pkgver format is wrong: $pkgver"; exit 1; }
+          [ "${#sha512sums[@]}" -eq 3 ] || { echo "Expected 3 checksums, got ${#sha512sums[@]}"; exit 1; }
+          for s in "${sha512sums[@]}"; do
+            [[ "$s" =~ ^[0-9a-f]{128}$ ]] || { echo "Invalid checksum format: $s"; exit 1; }
+          done
 
       - name: Dry-run summary
         if: steps.compare.outputs.uptodate == 'false' && github.event.inputs.dry_run == 'true'
@@ -138,12 +148,16 @@ jobs:
 
       - name: Push to AUR
         if: steps.compare.outputs.uptodate == 'false' && github.event.inputs.dry_run != 'true'
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
 
+          echo "$AUR_SSH_KEY" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
           eval "$(ssh-agent -s)"
-          echo '${{ secrets.AUR_SSH_KEY }}' | ssh-add -
+          ssh-add ~/.ssh/aur_key
 
           git config user.name "spivanatalie64"
           git config user.email "natalie@acreetionos.org"
