@@ -1,0 +1,21 @@
+name: Connect Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test SSH connection + target dir
+        env:
+          EMANRESU: ${{ secrets.EMANRESU }}
+          TACO: ${{ secrets.TACO }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
+          USER_HOST=$(printf '%s\n' "$EMANRESU" | sed -n 's/^\([^ ]*\).*/\1/p')
+          PORT=$(printf '%s\n' "$EMANRESU" | sed -n 's/.*-p[ =]*\([0-9]*\).*/\1/p')
+          echo "Connecting to $USER_HOST port $PORT"
+          sshpass -p "$TACO" ssh -p "$PORT" -o StrictHostKeyChecking=no "$USER_HOST" \
+            "mkdir -p ~/Packages/google-chrome && echo CONNECT_OK && hostname && ls -ld ~/Packages/google-chrome"
