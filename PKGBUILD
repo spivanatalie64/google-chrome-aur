@@ -1,12 +1,13 @@
 # Maintainer: Sprungles <natalie@acreetionos.org>
 
 pkgname=google-chrome-current
-pkgver=149.0.7827.114
+pkgver=151.0.7922.71
 pkgrel=1
 pkgdesc="The popular web browser by Google (Stable Channel). Maintained fork — the original google-chrome package has not been kept up to date."
 arch=('x86_64')
-url="https://www.google.com/chrome"
+url="https://github.com/spivanatalie64/google-chrome-aur"
 license=('custom:chrome')
+makedepends=('curl' 'libarchive')
 depends=(
 	'alsa-lib'
 	'gtk3'
@@ -26,15 +27,15 @@ optdepends=(
 options=('!emptydirs' '!strip')
 install=$pkgname.install
 _channel=stable
-source=("https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-${_channel}/google-chrome-${_channel}_${pkgver}-1_amd64.deb"
+source=('update.sh'
 	'eula_text.html'
 	"google-chrome-$_channel.sh")
-sha512sums=('668009d76e81dd83a3a69c9260c613e6577aa851ffc7a726331c2b1581d879c50a50cd655cf9de166080bfffea6acec68ccf6ba0f80496a3b734f0fca542224c'
+sha512sums=('adce3e65fbd513bcce29d5f480df74f2ee51fdada7fe2dea091872a48651f3d62698feba51a04223206e442eb378c5fb1655c1264c7f1a2f9be692c7c81ac8c5'
             'a225555c06b7c32f9f2657004558e3f996c981481dbb0d3cd79b1d59fa3f05d591af88399422d3ab29d9446c103e98d567aeafe061d9550817ab6e7eb0498396'
             'de02b498a4b5b93e21622c8dba57befe795d733a04656be911cc38e28bfef0e20470450f44be523bbde8d4de28f79c10434846ca01fc2a2f4e67707b79332f94')
 
 package() {
-	bsdtar -xf data.tar.xz -C "$pkgdir/"
+	./update.sh extract "$pkgdir"
 
 	# Launcher
 	install -m755 google-chrome-$_channel.sh "$pkgdir"/usr/bin/google-chrome-$_channel
